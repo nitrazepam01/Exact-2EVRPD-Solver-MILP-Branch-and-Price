@@ -1,0 +1,17 @@
+# ============================================================
+# 2E-VRP-D Exact Algorithm Solver — Python Dependencies
+# ============================================================
+#
+# IMPORTANT: IBM ILOG CPLEX 12.8+ must be installed separately.
+#   It is NOT available via pip. See README.md for installation.
+#
+# After installing CPLEX and activating your environment, run:
+#   pip install -r requirements.txt
+# ============================================================
+
+# Numerical computing — core data structures (distance/time matrices)
+# numpy 1.20+ drops Python 3.6 support
+numpy>=1.19.0,<1.20.0
+
+# Interactive CLI for main.py — algorithm and dataset selection
+questionary>=1.10.0,<3.0.0
