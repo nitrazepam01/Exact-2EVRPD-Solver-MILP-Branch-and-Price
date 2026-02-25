@@ -74,6 +74,15 @@ class Route:
         """ξ_ijr: 1 if drone node j is served from vehicle node i in this route. O(1)."""
         return 1 if (i, j) in self._drone_dispatches else 0
 
+    def signature(self):
+        """Create a hashable signature for deduplication."""
+        vn = tuple(self.vehicle_nodes)
+        da_items = []
+        for k in sorted(self.drone_assignments.keys()):
+            for dr in self.drone_assignments[k]:
+                da_items.append((k, tuple(dr)))
+        return (vn, tuple(da_items), self.num_drones)
+
     def __repr__(self):
         return (f"Route(veh={self.vehicle_nodes}, drones={self.drone_assignments}, "
                 f"num_drones={self.num_drones}, cost={self.cost:.2f})")

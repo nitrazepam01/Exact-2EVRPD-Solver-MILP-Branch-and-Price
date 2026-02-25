@@ -179,17 +179,22 @@ def solve_pricing_forward(data, lambda_i, lambda_v0, lambda_d0,
                 da = dict(label.path_da)
                 cost = _compute_label_route_cost(data, vn, da, k_bar_d)
 
-                # Reduced cost: c̄_r = c_r - C(L_f) - λ_v0 - k̄_d * λ_d0
-                rc = cost - label.C - lambda_v0 - k_bar_d * lambda_d0
+                # Reduced cost: c̄_r = c_r - C(L_f) - λ_v0 - actual_nd * λ_d0
+                # Clean up empty drone trips and compute actual num_drones
+                actual_nd = 0
+                cleaned_da = {}
+                for hub, trips in da.items():
+                    non_empty = [t for t in trips if len(t) > 0]
+                    if non_empty:
+                        cleaned_da[hub] = non_empty
+                        actual_nd = max(actual_nd, len(non_empty))
+                da = cleaned_da
+
+                # Use actual_nd (not k_bar_d) to avoid over-penalizing routes
+                # that use fewer drones than the pricing iteration's k̄_d
+                rc = cost - label.C - lambda_v0 - actual_nd * lambda_d0
 
                 if rc < -1e-6:
-                    # Determine actual drones used
-                    has_drones = any(
-                        len(dr) > 0
-                        for drs in da.values() for dr in drs
-                    ) if da else False
-                    actual_nd = k_bar_d if has_drones else 0
-
                     route = Route(vn, da, actual_nd, cost)
                     negative_rc_routes.append(route)
                     if len(negative_rc_routes) >= col_max:
@@ -391,22 +396,36 @@ def _compute_label_route_cost(data, vehicle_nodes, drone_assignments, k_bar_d):
 
 
 def solve_pricing_all(data, lambda_i, lambda_v0, lambda_d0,
-                      forbidden_arcs=None, forced_arcs=None, col_max=10):
+                      forbidden_arcs=None, forced_arcs=None, col_max=10,
+                      existing_sigs=None):
     """
     Run labeling for all k̄_d = 0, 1, ..., Γ.
-    Returns all routes with negative reduced cost (up to col_max).
+    Only genuinely new (non-duplicate) routes count toward col_max.
     """
-    all_routes = []
+    if existing_sigs is None:
+        existing_sigs = set()
+
+    all_new_routes = []
+
     for k_bar_d in range(data.Gamma + 1):
-        if len(all_routes) >= col_max:
+        if len(all_new_routes) >= col_max:
             break
-        remaining = col_max - len(all_routes)
+
+        remaining = col_max - len(all_new_routes)
         routes = solve_pricing_forward(
             data, lambda_i, lambda_v0, lambda_d0,
             k_bar_d, forbidden_arcs, forced_arcs, remaining
         )
-        all_routes.extend(routes)
-    return all_routes[:col_max]
+
+        for r in routes:
+            sig = r.signature()
+            if sig not in existing_sigs:
+                all_new_routes.append(r)
+                existing_sigs.add(sig)
+                if len(all_new_routes) >= col_max:
+                    break
+
+    return all_new_routes
 
 
 if __name__ == '__main__':

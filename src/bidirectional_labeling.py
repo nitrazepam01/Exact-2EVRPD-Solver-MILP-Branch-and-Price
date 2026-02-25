@@ -631,15 +631,6 @@ def _join_labels(data, Lf, Lb, k_bar_d, lambda_i, lambda_v0, lambda_d0):
             max_combo = max(max_combo, Lf.pi[1 + fi] + Lb.rho[1 + bi])
         c_r = Lb.C2 + max_combo
 
-    # Reduced cost: c̄_r = c_r - C(Lf) - C1(Lb) - λ_v0 - k̄_d·λ_d0
-    # Both Lf.C and Lb.C1 include λ[sigma] (the joining vehicle node),
-    # so we add it back once to correct the double-counting.
-    rc = (c_r - Lf.C - Lb.C1
-          + lambda_i.get(sigma, 0.0)  # undo one copy of lambda[sigma]
-          - lambda_v0 - k_bar_d * lambda_d0)
-    if rc >= -1e-6:
-        return None
-
     # Build path: forward ends at sigma, backward starts at sigma → skip one sigma
     # Lf.path_vn = [0, ..., sigma], Lb.path_vn = [sigma, ..., 0]
     vn = Lf.path_vn + Lb.path_vn[1:]
@@ -661,9 +652,26 @@ def _join_labels(data, Lf, Lb, k_bar_d, lambda_i, lambda_v0, lambda_d0):
             else:
                 da[k] = [list(dr) for dr in v]
 
-    # Determine actual drones used
-    has_drones = any(len(dr) > 0 for drs in da.values() for dr in drs) if da else False
-    actual_nd = k_bar_d if has_drones else 0
+    # Clean up empty drone trips and compute actual num_drones
+    actual_nd = 0
+    cleaned_da = {}
+    for hub, trips in da.items():
+        non_empty = [t for t in trips if len(t) > 0]
+        if non_empty:
+            cleaned_da[hub] = non_empty
+            actual_nd = max(actual_nd, len(non_empty))
+    da = cleaned_da
+
+    # Reduced cost: c̄_r = c_r - C(Lf) - C1(Lb) - λ_v0 - actual_nd·λ_d0
+    # Both Lf.C and Lb.C1 include λ[sigma] (the joining vehicle node),
+    # so we add it back once to correct the double-counting.
+    # Use actual_nd (not k_bar_d) to avoid over-penalizing routes that
+    # use fewer drones than the pricing iteration's k̄_d.
+    rc = (c_r - Lf.C - Lb.C1
+          + lambda_i.get(sigma, 0.0)  # undo one copy of lambda[sigma]
+          - lambda_v0 - actual_nd * lambda_d0)
+    if rc >= -1e-6:
+        return None
 
     route = Route(vn, da, actual_nd, c_r)
     return route
@@ -772,19 +780,36 @@ def solve_pricing_bidirectional(data, lambda_i, lambda_v0, lambda_d0,
 
 def solve_pricing_bidirectional_all(data, lambda_i, lambda_v0, lambda_d0,
                                     forbidden_arcs=None, forced_arcs=None,
-                                    col_max=10):
-    """Run bidirectional labeling for all k̄_d = 0, 1, ..., Γ."""
-    all_routes = []
+                                    col_max=10, existing_sigs=None):
+    """Run bidirectional labeling for all k̄_d = 0, 1, ..., Γ.
+    
+    Only genuinely new (non-duplicate) routes count toward col_max,
+    preventing CG degeneracy where k̄_d=0 duplicates block k̄_d>0 exploration.
+    """
+    if existing_sigs is None:
+        existing_sigs = set()
+
+    all_new_routes = []  # only new (non-duplicate) routes
+
     for k_bar_d in range(data.Gamma + 1):
-        if len(all_routes) >= col_max:
+        if len(all_new_routes) >= col_max:
             break
-        remaining = col_max - len(all_routes)
+
+        remaining = col_max - len(all_new_routes)
         routes = solve_pricing_bidirectional(
             data, lambda_i, lambda_v0, lambda_d0,
             k_bar_d, forbidden_arcs, forced_arcs, remaining
         )
-        all_routes.extend(routes)
-    return all_routes[:col_max]
+
+        for r in routes:
+            sig = r.signature()
+            if sig not in existing_sigs:
+                all_new_routes.append(r)
+                existing_sigs.add(sig)
+                if len(all_new_routes) >= col_max:
+                    break
+
+    return all_new_routes
 
 
 if __name__ == '__main__':

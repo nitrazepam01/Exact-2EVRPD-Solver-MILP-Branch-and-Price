@@ -47,6 +47,7 @@ class RMPSolver:
         self._extra_cst_names = []     # branching constraint names
         self._route_var_names = []     # μ_r variable names
         self._dummy_var_names = []     # χ_i variable names
+        self._branch_dummy_names = []  # artificial vars for branching constraints
         self._built = False
 
     def build(self):
@@ -104,6 +105,22 @@ class RMPSolver:
                 rhs=[ec['rhs']],
                 names=[name]
             )
+
+        # --- Add artificial variables for G/E branching constraints ---
+        # Without these, RMP becomes infeasible when no existing columns
+        # satisfy a >= constraint, preventing CG from producing duals.
+        self._branch_dummy_names = []
+        for idx, ec in enumerate(self.extra_constraints):
+            if ec['sense'] in ['G', 'E']:
+                name = f"branch_dummy_{idx}"
+                self._branch_dummy_names.append(name)
+                cst_name = self._extra_cst_names[idx]
+                self.cpx.variables.add(
+                    names=[name],
+                    obj=[self.penalty_M],
+                    lb=[0.0],
+                    columns=[cplex.SparsePair([cst_name], [1.0])]
+                )
 
         # --- Add dummy variables χ_i for each customer ---
         self._dummy_var_names = []
@@ -221,8 +238,8 @@ class RMPSolver:
         Returns:
             tuple: (lambda_i_dict, lambda_v0, lambda_d0)
                 lambda_i_dict: {customer_i: dual_value}  (for constraints 33)
-                lambda_v0: dual of constraint (34), guaranteed ≤ 0
-                lambda_d0: dual of constraint (35), guaranteed ≤ 0
+                lambda_v0: dual of constraint (34) + vehicle_count branching duals
+                lambda_d0: dual of constraint (35) + drone_count branching duals
         """
         Z = self.data.Z
 
@@ -234,6 +251,18 @@ class RMPSolver:
 
         lambda_v0 = self.cpx.solution.get_dual_values(self._cst_vehicle_name)
         lambda_d0 = self.cpx.solution.get_dual_values(self._cst_drone_name)
+
+        # Accumulate duals from branching constraints into pricing duals.
+        # vehicle_count: coeff = 1.0 for all routes → same structure as (34)
+        # drone_count:   coeff = d_r for each route → same structure as (35)
+        # arc_flow/drone_dispatch: handled by forbidden/forced arcs, no dual needed
+        for idx, ec in enumerate(self.extra_constraints):
+            cst_name = self._extra_cst_names[idx]
+            dual_val = self.cpx.solution.get_dual_values(cst_name)
+            if ec['type'] == 'vehicle_count':
+                lambda_v0 += dual_val
+            elif ec['type'] == 'drone_count':
+                lambda_d0 += dual_val
 
         return lambda_i, lambda_v0, lambda_d0
 
@@ -263,6 +292,10 @@ class RMPSolver:
             var_name = self._dummy_var_names[idx]
             val = self.cpx.solution.get_values(var_name)
             result[i] = val
+        # Include branch dummies
+        for name in self._branch_dummy_names:
+            val = self.cpx.solution.get_values(name)
+            result[name] = val
         return result
 
     def is_integer_solution(self, tol=1e-5):
@@ -274,6 +307,11 @@ class RMPSolver:
                 return False
         # Also check dummy variables are all zero
         for name in self._dummy_var_names:
+            val = self.cpx.solution.get_values(name)
+            if val > tol:
+                return False
+        # Also check branch dummies are all zero
+        for name in self._branch_dummy_names:
             val = self.cpx.solution.get_values(name)
             if val > tol:
                 return False

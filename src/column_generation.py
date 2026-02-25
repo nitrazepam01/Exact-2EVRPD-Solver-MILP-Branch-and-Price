@@ -20,12 +20,7 @@ from labeling import solve_pricing_all as solve_pricing_forward_only
 
 def _route_signature(route):
     """Create a hashable signature for a route to detect duplicates."""
-    vn = tuple(route.vehicle_nodes)
-    da_items = []
-    for k in sorted(route.drone_assignments.keys()):
-        for dr in route.drone_assignments[k]:
-            da_items.append((k, tuple(dr)))
-    return (vn, tuple(da_items), route.num_drones)
+    return route.signature()
 
 
 def run_column_generation(data, initial_routes=None, forbidden_arcs=None,
@@ -122,7 +117,7 @@ def run_column_generation(data, initial_routes=None, forbidden_arcs=None,
             exact_routes = solve_pricing_bidirectional_all(
                 data, lambda_i, lambda_v0, lambda_d0,
                 forbidden_arcs=forbidden_arcs, forced_arcs=forced_arcs,
-                col_max=remaining
+                col_max=remaining, existing_sigs=set(existing_sigs)
             )
             new_routes.extend(exact_routes)
 
@@ -134,7 +129,7 @@ def run_column_generation(data, initial_routes=None, forbidden_arcs=None,
             fwd_routes = solve_pricing_forward_only(
                 data, lambda_i, lambda_v0, lambda_d0,
                 forbidden_arcs=forbidden_arcs, forced_arcs=forced_arcs,
-                col_max=remaining
+                col_max=remaining, existing_sigs=set(existing_sigs)
             )
             new_routes.extend(fwd_routes)
 
